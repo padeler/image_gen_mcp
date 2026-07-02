@@ -1,0 +1,42 @@
+services:
+  comfyui:
+    # Actively maintained ComfyUI image (https://github.com/YanWenKun/ComfyUI-Docker).
+    # cu130 requires NVIDIA driver >= 580 on the host; use cu126-slim for older drivers.
+    image: yanwk/comfyui-boot:cu130-slim-v2
+    restart: unless-stopped
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./models:/root/ComfyUI/models
+      - ./output:/root/ComfyUI/output
+      - ./input:/root/ComfyUI/input
+      - ./user:/root/ComfyUI/user
+    environment:
+      - CLI_ARGS=
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # ComfyUI uses a single GPU per instance. Restrict with
+              # device_ids: ["0"] if the second GPU is needed elsewhere.
+              count: all
+              capabilities: [gpu]
+
+  comfyui-mcp:
+    # MCP server (https://github.com/artokun/comfyui-mcp) exposing ComfyUI
+    # to MCP clients over streamable HTTP at http://<host>:9100/mcp
+    build: ./mcp
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    environment:
+      - COMFYUI_URL=http://comfyui:8188
+      # Trusted private LAN: allow the endpoint without auth. To add auth later,
+      # remove this line and set COMFYUI_MCP_HTTP_TOKEN=<secret> instead
+      # (clients then send "Authorization: Bearer <secret>").
+      - COMFYUI_MCP_ALLOW_UNAUTH=1
+      # Keep the container image immutable; upgrade by rebuilding instead.
+      - COMFYUI_MCP_AUTOUPDATE=0
+    depends_on:
+      - comfyui
