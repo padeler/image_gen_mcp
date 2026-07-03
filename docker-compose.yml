@@ -4,8 +4,6 @@ services:
     # cu130 requires NVIDIA driver >= 580 on the host; use cu126-slim for older drivers.
     image: yanwk/comfyui-boot:cu130-slim-v2
     restart: unless-stopped
-    ports:
-      - "8188:8188"
     volumes:
       - ./models:/root/ComfyUI/models
       - ./output:/root/ComfyUI/output
@@ -24,19 +22,31 @@ services:
               capabilities: [gpu]
 
   comfyui-mcp:
-    # MCP server (https://github.com/artokun/comfyui-mcp) exposing ComfyUI
-    # to MCP clients over streamable HTTP at http://<host>:9100/mcp
+    # MCP server (https://github.com/artokun/comfyui-mcp) speaking streamable
+    # HTTP at /mcp. Not published directly — reachable only via the gateway.
     build: ./mcp
     restart: unless-stopped
-    ports:
-      - "9100:9100"
     environment:
       - COMFYUI_URL=http://comfyui:8188
-      # Trusted private LAN: allow the endpoint without auth. To add auth later,
-      # remove this line and set COMFYUI_MCP_HTTP_TOKEN=<secret> instead
-      # (clients then send "Authorization: Bearer <secret>").
-      - COMFYUI_MCP_ALLOW_UNAUTH=1
+      # Every request must carry "Authorization: Bearer <MCP_TOKEN>".
+      - COMFYUI_MCP_HTTP_TOKEN=${MCP_TOKEN:?Set MCP_TOKEN in .env (see .env.example)}
       # Keep the container image immutable; upgrade by rebuilding instead.
       - COMFYUI_MCP_AUTOUPDATE=0
     depends_on:
       - comfyui
+
+  gateway:
+    # Single entry point: rejects requests from outside ALLOWED_SUBNET
+    # (nginx allow/deny) before they reach ComfyUI or the MCP server.
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${BIND_IP:-0.0.0.0}:8188:8188"
+      - "${BIND_IP:-0.0.0.0}:9100:9100"
+    volumes:
+      - ./gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    environment:
+      - ALLOWED_SUBNET=${ALLOWED_SUBNET:?Set ALLOWED_SUBNET in .env (see .env.example)}
+    depends_on:
+      - comfyui
+      - comfyui-mcp

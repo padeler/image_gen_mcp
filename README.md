@@ -5,8 +5,9 @@ two containers managed by one docker-compose file.
 
 | Service      | Image                                | Port | Purpose                                  |
 |--------------|--------------------------------------|------|------------------------------------------|
-| `comfyui`    | `yanwk/comfyui-boot:cu130-slim-v2`   | 8188 | ComfyUI backend (web UI + API)            |
-| `comfyui-mcp`| built from `mcp/Dockerfile`          | 9100 | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server, streamable HTTP at `/mcp` |
+| `comfyui`    | `yanwk/comfyui-boot:cu130-slim-v2`   | —    | ComfyUI backend (web UI + API), internal only |
+| `comfyui-mcp`| built from `mcp/Dockerfile`          | —    | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server, streamable HTTP at `/mcp`, internal only |
+| `gateway`    | `nginx:1.27-alpine`                  | 8188, 9100 | Single entry point: source-IP allowlist (`ALLOWED_SUBNET`) in front of both services |
 
 ## Requirements
 
@@ -18,6 +19,7 @@ two containers managed by one docker-compose file.
 ## Quickstart
 
 ```bash
+cp .env.example .env                  # then set MCP_TOKEN (openssl rand -hex 32)
 docker compose up -d --build
 ./scripts/download_models.sh          # SDXL Base 1.0 (~6.9 GB) into models/checkpoints
 ```
@@ -30,7 +32,8 @@ docker compose up -d --build
 Claude Code:
 
 ```bash
-claude mcp add comfyui --transport http http://<host>:9100/mcp
+claude mcp add comfyui --transport http http://<host>:9100/mcp \
+  --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
 Or per-project via `.mcp.json`:
@@ -38,17 +41,29 @@ Or per-project via `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "comfyui": { "type": "http", "url": "http://<host>:9100/mcp" }
+    "comfyui": {
+      "type": "http",
+      "url": "http://<host>:9100/mcp",
+      "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+    }
   }
 }
 ```
 
+## Security
+
+Two layers, both configured in `.env`:
+
+- **Token auth**: the MCP server rejects requests without
+  `Authorization: Bearer <MCP_TOKEN>` (HTTP 401).
+- **Source-IP allowlist**: only the nginx `gateway` publishes ports; it denies
+  requests from outside `ALLOWED_SUBNET` (HTTP 403) for both the MCP endpoint
+  and the ComfyUI UI/API.
+- On multi-homed hosts additionally set `BIND_IP` to the LAN interface IP so
+  the ports are not published on other interfaces at all.
+
 ## Notes
 
-- The MCP endpoint is **unauthenticated** (`COMFYUI_MCP_ALLOW_UNAUTH=1`) — intended
-  for a trusted private LAN only. To add auth, replace that env var with
-  `COMFYUI_MCP_HTTP_TOKEN=<secret>` in `docker-compose.yml` and send
-  `Authorization: Bearer <secret>` from clients.
 - ComfyUI uses one GPU per instance. On a multi-GPU host, pin it with
   `device_ids: ["0"]` in the compose file (replacing `count: all`) if the other
   GPU is needed elsewhere.
