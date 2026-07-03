@@ -6,3 +6,4 @@ user/
 .env
 comfy_project/
 .mcp.json
+.nfs*
