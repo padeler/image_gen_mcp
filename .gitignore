@@ -5,3 +5,4 @@ user/
 .venv/
 .env
 comfy_project/
+.mcp.json
