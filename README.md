@@ -62,6 +62,68 @@ Two layers, both configured in `.env`:
 - On multi-homed hosts additionally set `BIND_IP` to the LAN interface IP so
   the ports are not published on other interfaces at all.
 
+## Local Capabilities
+
+The comfyui-mcp server exposes a broad set of tools that run entirely on the local GPU — no cloud account or external API key required.
+
+### Image Generation
+
+| Tool | Description |
+|------|-------------|
+| `generate_image` | Text-to-image (txt2img) — builds the workflow, auto-selects checkpoint |
+| `generate_with_controlnet` | Pose, depth, or canny-conditioned generation from a preprocessed map |
+| `generate_with_ip_adapter` | Style/subject transfer guided by a reference image |
+| `remove_background` | BiRefNet matting — returns transparent RGBA cutout |
+| `upscale_image` | ESRGAN super-resolution (2x / 4x) |
+| `create_workflow` | Template builder for txt2img, img2img, upscale, inpaint, controlnet, ip_adapter |
+
+### Video Generation
+
+| Tool | Description |
+|------|-------------|
+| `generate_video` | LTX-2.3 text-to-video and image-to-video (distilled model, ~8 steps) |
+
+### Audio Generation
+
+| Tool | Description |
+|------|-------------|
+| `generate_audio` | ACE Step 1.5 or Stable Audio 3 text-to-audio |
+
+### Workflow Lifecycle
+
+- **Submit & monitor:** `enqueue_workflow`, `get_job_status`, `get_history`
+- **Reproduce:** `rerun_generation`, `regenerate` (with parameter overrides)
+- **Validate:** `validate_workflow` — dry-run check before execution
+- **Inspect:** `analyze_workflow`, `visualize_workflow` — structured summary or Mermaid diagram
+- **Edit:** `modify_workflow` — surgical ops (set input, add/remove/connect nodes)
+- **Round-trip:** `workflow_to_dsl` / `dsl_to_workflow` — compact human-readable format
+- **Surgical extraction:** `slice_workflow` / `strip_workflow` — extract one pipeline from a toggle-template monolith
+
+### Model & Node Management
+
+- **Download models:** `download_model` (any URL), `download_civitai_model` (CivitAI id)
+- **Search:** `search_models` (HuggingFace)
+- **Custom nodes:** `install_custom_node`, `update_custom_node`, `fix_custom_node` via ComfyUI-Manager
+- **Installer packs:** 54 bundled packs covering ANIMA, ERNIE, Ideogram, Krea 2, LTX-2.3, Qwen-Image, WAN 2.2, Z-Image families — install models + custom nodes + ready-to-run workflow in one step via `apply_manifest`
+- **Built-in skills:** 31 domain-expertise skills (prompt engineering, color correction, debugging, LoRA training, per-family setup guides)
+
+### File & Asset Handling
+
+- **Upload:** `upload_image`, `upload_video`, `upload_audio` — stage inputs for loaders
+- **Chain stages:** `stage_output_as_input` — wire one stage's output into the next stage's input
+- **Inspect output:** `list_output_images` — recursive scan of images and videos
+- **View / fetch:** `view_image` (inline), `get_image` (save to disk)
+- **Convert:** `convert_image` — re-encode to PNG, JPEG, or WebP
+- **Export:** `upload_output` — push results to S3, Azure Blob, HTTP PUT, or HuggingFace
+
+### Utilities
+
+- `clear_vram` — unload cached models between runs
+- Queue management: `clear_queue`, `cancel_job`, `move_queued_job`, `edit_queued_job`
+- Provenance: `lock_workflow` / `verify_workflow_lock` — SHA-256 model hashes + git commit pins
+- Debug: `bisect_start/good/bad` — binary search for a broken custom node
+- Custom node authoring: `scaffold_custom_node`, `verify_custom_node`, `publish_custom_node`
+
 ## Notes
 
 - ComfyUI uses one GPU per instance. On a multi-GPU host, pin it with
