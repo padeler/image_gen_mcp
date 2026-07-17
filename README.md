@@ -6,7 +6,7 @@ two containers managed by one docker-compose file.
 | Service      | Image                                | Port | Purpose                                  |
 |--------------|--------------------------------------|------|------------------------------------------|
 | `comfyui`    | `yanwk/comfyui-boot:cu130-slim-v2`   | —    | ComfyUI backend (web UI + API), internal only |
-| `comfyui-mcp`| built from `mcp/Dockerfile`          | —    | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server, streamable HTTP at `/mcp`, internal only |
+| `comfyui-mcp`| built from `mcp/Dockerfile`          | —    | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server (our fork [`padeler/comfyui-mcp`](https://github.com/padeler/comfyui-mcp)), streamable HTTP at `/mcp`, internal only |
 | `gateway`    | `nginx:1.27-alpine`                  | 8188, 9100 | Single entry point: source-IP allowlist (`ALLOWED_SUBNET`) in front of both services |
 
 ## Requirements
@@ -50,6 +50,45 @@ Or per-project via `.mcp.json`:
 }
 ```
 
+## Downloading generated content
+
+> The MCP server now **advertises this download guidance automatically**: our
+> fork populates the MCP `instructions` field (returned on `initialize`), so any
+> connecting client learns the `/view` download path without per-repo docs. The
+> concrete URL comes from `COMFYUI_PUBLIC_URL` (set in `.env`, see below). This
+> section is the human-facing version of the same thing.
+
+The MCP server runs in **remote mode** (it reaches ComfyUI over HTTP, `COMFYUI_PATH`
+is unset). Two consequences follow for retrieving generated artifacts from a
+different host than the one running the stack:
+
+- MCP tools that "save to disk" (`get_image`'s `save_dir`, default
+  `/tmp/comfyui-images/`) write to the **MCP container's** filesystem on the
+  server, not the client — do not rely on them for remote download.
+- `get_image` / `view_image` return image bytes **inline** over MCP, which does
+  reach a remote client — but only for images (PNG/JPEG/WebP). Video and audio
+  have no inline path.
+
+The universal, artifact-type-agnostic way to download any output is ComfyUI's
+own HTTP `/view` endpoint, already published by the gateway on port `8188`
+(source-IP allowlisted, no bearer token required):
+
+```
+http://<host>:8188/view?filename=<name>&subfolder=<sub>&type=output
+```
+
+Typical flow from a remote client — list outputs via MCP, then fetch over HTTP:
+
+1. `list_output_images` (MCP) → gives each result's `filename` and `subfolder`.
+2. `curl -o result.png "http://<host>:8188/view?filename=<name>&subfolder=<sub>&type=output"`
+
+`subfolder` is empty for top-level outputs and set for nested writes (e.g.
+`SaveVideo` writes under `output/video/`). This works identically for `.png`,
+`.mp4`, `.wav`, etc.
+
+For pushing outputs elsewhere instead of pulling, `upload_output` (MCP) sends a
+result to S3, Azure Blob, an HTTP PUT URL, or HuggingFace.
+
 ## Security
 
 Two layers, both configured in `.env`:
@@ -61,6 +100,38 @@ Two layers, both configured in `.env`:
   and the ComfyUI UI/API.
 - On multi-homed hosts additionally set `BIND_IP` to the LAN interface IP so
   the ports are not published on other interfaces at all.
+
+## MCP server fork
+
+The `comfyui-mcp` service is built from our fork
+[`padeler/comfyui-mcp`](https://github.com/padeler/comfyui-mcp)
+(branch `feat/public-download-instructions`) rather than the upstream npm
+package. `mcp/Dockerfile` builds it in two stages and pins it to an immutable
+commit via the `COMFYUI_MCP_REF` build arg.
+
+**Why the fork exists.** In remote mode (this deployment), a fresh MCP client had
+no way to learn how to download generated artifacts: `get_image`'s `save_dir`
+writes to the MCP *server's* filesystem, only images return inline, and the
+reliable HTTP path (ComfyUI's `/view` endpoint) was undocumented over the MCP
+channel itself. The fork makes that guidance travel *with* the server.
+
+**What changed** (three small, surgical edits — see the branch for the diff):
+
+- **`COMFYUI_PUBLIC_URL`** — a new env var for the client-reachable base URL of
+  ComfyUI (e.g. `http://192.168.1.2:8188`), distinct from `COMFYUI_URL`, which is
+  the container-internal address (`http://comfyui:8188`) that clients can't reach.
+  Exposed via a `getComfyUIPublicUrl()` helper that falls back to the API base
+  URL when unset.
+- **MCP `instructions`** — the server now populates the `instructions` field of
+  the `initialize` response with concrete download guidance (the `/view` URL built
+  from `COMFYUI_PUBLIC_URL`). MCP clients surface `instructions` automatically on
+  connect, so any client in any repo learns the download path with no per-repo
+  documentation.
+- **`.env.example`** — documents the new `COMFYUI_PUBLIC_URL` variable.
+
+These changes are upstream-friendly and additive (no behavior change when
+`COMFYUI_PUBLIC_URL` is unset); the intent is to contribute them back to
+[`artokun/comfyui-mcp`](https://github.com/artokun/comfyui-mcp).
 
 ## Local Capabilities
 
@@ -131,5 +202,8 @@ The comfyui-mcp server exposes a broad set of tools that run entirely on the loc
   GPU is needed elsewhere.
 - Models live in `./models/<category>/` (checkpoints, loras, vae, ...) and are
   bind-mounted into the container. `./output` holds generated images.
-- Upgrade the MCP server by bumping `COMFYUI_MCP_VERSION` in `mcp/Dockerfile`
-  and running `docker compose up -d --build comfyui-mcp`.
+- The MCP server is built from our fork
+  [`padeler/comfyui-mcp`](https://github.com/padeler/comfyui-mcp) (adds
+  `COMFYUI_PUBLIC_URL` + the auto-advertised download `instructions`). Upgrade it
+  by bumping `COMFYUI_MCP_REF` (a commit SHA) in `mcp/Dockerfile` and running
+  `docker compose up -d --build comfyui-mcp`.
