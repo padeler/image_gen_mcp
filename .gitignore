@@ -7,3 +7,4 @@ user/
 comfy_project/
 .mcp.json
 .nfs*
+.vscode

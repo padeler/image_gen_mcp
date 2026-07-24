@@ -16,9 +16,10 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              # ComfyUI uses a single GPU per instance. Restrict with
-              # device_ids: ["0"] if the second GPU is needed elsewhere.
-              count: all
+              # Pinned to GPU0. comfyui-gpu1 below is the GPU1 twin, so the
+              # two instances can each run a generation in parallel instead
+              # of contending for the same device.
+              device_ids: ["0"]
               capabilities: [gpu]
 
   comfyui-mcp:
@@ -41,6 +42,46 @@ services:
     depends_on:
       - comfyui
 
+  comfyui-gpu1:
+    # GPU1 twin of `comfyui` — a second, independent ComfyUI process so the
+    # host's two GPUs can each serve one generation concurrently. ComfyUI
+    # itself is single-GPU per process; this is two processes, not one
+    # workflow split across devices.
+    # Opt-in via `--profile gpu1` so single-GPU hosts are unaffected by
+    # `docker compose up -d`.
+    profiles: ["gpu1"]
+    image: yanwk/comfyui-boot:cu130-slim-v2
+    restart: unless-stopped
+    volumes:
+      - ./models:/root/ComfyUI/models
+      - ./output:/root/ComfyUI/output
+      - ./input:/root/ComfyUI/input
+      - ./user:/root/ComfyUI/user
+    environment:
+      - CLI_ARGS=
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+  comfyui-mcp-gpu1:
+    # GPU1 twin of `comfyui-mcp`, talking to comfyui-gpu1. A separate MCP
+    # endpoint (port 9101 via the gateway) rather than one server load-
+    # balancing across both — the client picks which GPU to send a job to.
+    profiles: ["gpu1"]
+    build: ./mcp
+    restart: unless-stopped
+    environment:
+      - COMFYUI_URL=http://comfyui-gpu1:8188
+      - COMFYUI_PUBLIC_URL=${COMFYUI_PUBLIC_URL_GPU1:?Set COMFYUI_PUBLIC_URL_GPU1 in .env (see .env.example)}
+      - COMFYUI_MCP_HTTP_TOKEN=${MCP_TOKEN:?Set MCP_TOKEN in .env (see .env.example)}
+      - COMFYUI_MCP_AUTOUPDATE=0
+    depends_on:
+      - comfyui-gpu1
+
   gateway:
     # Single entry point: rejects requests from outside ALLOWED_SUBNET
     # (nginx allow/deny) before they reach ComfyUI or the MCP server.
@@ -49,10 +90,16 @@ services:
     ports:
       - "${BIND_IP:-0.0.0.0}:8188:8188"
       - "${BIND_IP:-0.0.0.0}:9100:9100"
+      - "${BIND_IP:-0.0.0.0}:8189:8189"
+      - "${BIND_IP:-0.0.0.0}:9101:9101"
     volumes:
       - ./gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     environment:
       - ALLOWED_SUBNET=${ALLOWED_SUBNET:?Set ALLOWED_SUBNET in .env (see .env.example)}
+    # Deliberately does not depend_on the GPU1 pair: they're behind the
+    # optional `gpu1` profile, and gateway's nginx config resolves their
+    # hostnames at request time (see gateway/default.conf.template) so it
+    # doesn't need them present at startup.
     depends_on:
       - comfyui
       - comfyui-mcp

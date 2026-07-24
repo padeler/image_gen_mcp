@@ -1,13 +1,21 @@
 # image_gen_mcp
 
 Self-hosted image generation for MCP clients (Claude Code, Claude Desktop, Cursor, ...):
-two containers managed by one docker-compose file.
+containers managed by one docker-compose file.
 
-| Service      | Image                                | Port | Purpose                                  |
-|--------------|--------------------------------------|------|------------------------------------------|
-| `comfyui`    | `yanwk/comfyui-boot:cu130-slim-v2`   | —    | ComfyUI backend (web UI + API), internal only |
-| `comfyui-mcp`| built from `mcp/Dockerfile`          | —    | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server (our fork [`padeler/comfyui-mcp`](https://github.com/padeler/comfyui-mcp)), streamable HTTP at `/mcp`, internal only |
-| `gateway`    | `nginx:1.27-alpine`                  | 8188, 9100 | Single entry point: source-IP allowlist (`ALLOWED_SUBNET`) in front of both services |
+| Service            | Image                                | Port | Purpose                                  |
+|--------------------|--------------------------------------|------|------------------------------------------|
+| `comfyui`          | `yanwk/comfyui-boot:cu130-slim-v2`   | —    | ComfyUI backend (web UI + API), GPU0, internal only |
+| `comfyui-mcp`      | built from `mcp/Dockerfile`          | —    | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) MCP server (our fork [`padeler/comfyui-mcp`](https://github.com/padeler/comfyui-mcp)), streamable HTTP at `/mcp`, internal only |
+| `comfyui-gpu1`     | `yanwk/comfyui-boot:cu130-slim-v2`   | —    | Second ComfyUI backend, pinned to GPU1, internal only |
+| `comfyui-mcp-gpu1` | built from `mcp/Dockerfile`          | —    | MCP server for `comfyui-gpu1`, streamable HTTP at `/mcp`, internal only |
+| `gateway`          | `nginx:1.27-alpine`                  | 8188, 9100, 8189, 9101 | Single entry point: source-IP allowlist (`ALLOWED_SUBNET`) in front of all four backend services |
+
+The GPU1 pair is behind the `gpu1` compose profile. `.env.example` sets
+`COMPOSE_PROFILES=gpu1`, so plain `docker compose up -d` starts all five
+services by default on a two-GPU host — comment that line out on a
+single-GPU host to fall back to just `comfyui`/`comfyui-mcp`/`gateway`. See
+[Parallel GPUs](#parallel-gpus) for details.
 
 ## Requirements
 
@@ -49,6 +57,54 @@ Or per-project via `.mcp.json`:
   }
 }
 ```
+
+## Parallel GPUs
+
+On a host with two GPUs, `comfyui-gpu1` + `comfyui-mcp-gpu1` are a second,
+independent instance pinned to GPU1 — each ComfyUI process is still
+single-GPU, but the two can each serve one generation at the same time. It's
+a second MCP endpoint, not automatic load balancing: you (or the client)
+choose which GPU's tool to call for a given job.
+
+Enabled by default (`COMPOSE_PROFILES=gpu1` in `.env.example`) once
+`COMFYUI_PUBLIC_URL_GPU1` is set:
+
+```bash
+docker compose up -d --build
+```
+
+To bring up just the GPU1 pair without restarting GPU0, or on a host where
+`COMPOSE_PROFILES` isn't set:
+
+```bash
+docker compose --profile gpu1 up -d --build
+```
+
+- ComfyUI web UI (GPU1): `http://<host>:8189`
+- MCP endpoint (GPU1):   `http://<host>:9101/mcp`
+
+Add it as a second server in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "comfyui": {
+      "type": "http",
+      "url": "http://<host>:9100/mcp",
+      "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+    },
+    "comfyui-gpu1": {
+      "type": "http",
+      "url": "http://<host>:9101/mcp",
+      "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+    }
+  }
+}
+```
+
+Both instances share the same `./models`, `./output`, `./input`, `./user`
+bind mounts, so no model duplication is needed — just make sure the host
+actually has two GPUs before enabling the profile (`nvidia-smi -L`).
 
 ## Downloading generated content
 
@@ -197,9 +253,9 @@ The comfyui-mcp server exposes a broad set of tools that run entirely on the loc
 
 ## Notes
 
-- ComfyUI uses one GPU per instance. On a multi-GPU host, pin it with
-  `device_ids: ["0"]` in the compose file (replacing `count: all`) if the other
-  GPU is needed elsewhere.
+- ComfyUI uses one GPU per instance (`comfyui` is pinned to `device_ids: ["0"]`
+  in the compose file). See [Parallel GPUs](#parallel-gpus) to also use a
+  second GPU via the `comfyui-gpu1` / `comfyui-mcp-gpu1` pair.
 - Models live in `./models/<category>/` (checkpoints, loras, vae, ...) and are
   bind-mounted into the container. `./output` holds generated images.
 - The MCP server is built from our fork

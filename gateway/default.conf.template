@@ -41,3 +41,47 @@ server {
         proxy_read_timeout 3600s;
     }
 }
+
+# GPU1 backends run under the optional `gpu1` compose profile, so their
+# container names may not resolve via Docker's embedded DNS. Resolve at
+# request time (not nginx startup) so an inactive profile 502s on request
+# instead of crash-looping the whole gateway, including the GPU0 blocks above.
+resolver 127.0.0.11 valid=10s;
+
+# MCP server (streamable HTTP / SSE) — GPU1 instance
+server {
+    listen 9101;
+    allow ${ALLOWED_SUBNET};
+    deny all;
+
+    location / {
+        set $gpu1_mcp_upstream comfyui-mcp-gpu1:9100;
+        proxy_pass http://$gpu1_mcp_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}
+
+# ComfyUI (web UI + API, uses websockets) — GPU1 instance
+server {
+    listen 8189;
+    allow ${ALLOWED_SUBNET};
+    deny all;
+
+    client_max_body_size 512m;
+
+    location / {
+        set $gpu1_comfyui_upstream comfyui-gpu1:8188;
+        proxy_pass http://$gpu1_comfyui_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}
