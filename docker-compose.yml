@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./models:/root/ComfyUI/models
+      - ./custom_nodes:/root/ComfyUI/custom_nodes
       - ./output:/root/ComfyUI/output
       - ./input:/root/ComfyUI/input
       - ./user:/root/ComfyUI/user
@@ -54,6 +55,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./models:/root/ComfyUI/models
+      - ./custom_nodes:/root/ComfyUI/custom_nodes
       - ./output:/root/ComfyUI/output
       - ./input:/root/ComfyUI/input
       - ./user:/root/ComfyUI/user
